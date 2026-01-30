@@ -87,6 +87,62 @@ Example:
 
 It will print tmux attach/capture commands so you can monitor progress.
 
+## Spec Kit end-to-end workflow (tips that prevent hangs)
+
+When you want Claude Code to drive **Spec Kit** end-to-end via `/speckit.*`, do **not** use headless `-p` for the whole flow.
+Use **interactive tmux mode** because:
+- Spec Kit runs multiple steps (Bash + file writes + git) and may pause for confirmations.
+- Headless runs can appear idle and be killed (SIGKILL) by supervisors.
+
+### Prerequisites (important)
+
+1) **Initialize Spec Kit** (once per repo)
+```bash
+specify init . --ai claude
+```
+
+2) Ensure the folder is a real git repo (Spec Kit uses git branches/scripts):
+```bash
+git init
+git add -A
+git commit -m "chore: init"
+```
+
+3) Recommended: set an `origin` remote (can be a local bare repo) so `git fetch --all --prune` won’t behave oddly:
+```bash
+git init --bare ../origin.git
+git remote add origin ../origin.git
+git push -u origin main || git push -u origin master
+```
+
+4) Give Claude Code enough tool permissions for the workflow:
+- Spec creation/tasks/implement need file writes, so include **Write**.
+- Implementation often needs Bash.
+
+Recommended:
+```bash
+--permission-mode acceptEdits --allowedTools "Bash,Read,Edit,Write"
+```
+
+### Run the full Spec Kit pipeline
+
+```bash
+./scripts/claude_code_run.py \
+  --mode interactive \
+  --tmux-session cc-speckit \
+  --permission-mode acceptEdits \
+  --allowedTools "Bash,Read,Edit,Write" \
+  -p $'/speckit.constitution Create project principles for quality, accessibility, and security.\n/speckit.specify <your feature description>\n/speckit.plan I am building with <your stack/constraints>\n/speckit.tasks\n/speckit.implement'
+```
+
+### Monitoring / interacting
+
+The wrapper prints commands like:
+- `tmux ... attach -t <session>` to watch in real time
+- `tmux ... capture-pane ...` to snapshot output
+
+If Claude Code asks a question mid-run (e.g., “Proceed?”), attach and answer.
+
 ## Bundled script
 
 - `scripts/claude_code_run.py`: wrapper that runs the local `claude` binary with a pseudo-terminal and forwards flags.
