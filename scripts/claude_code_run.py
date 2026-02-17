@@ -85,15 +85,71 @@ def build_headless_cmd(args: argparse.Namespace) -> list[str]:
 
 
 def run_with_pty(cmd: list[str], cwd: str | None) -> int:
-    cmd_str = " ".join(shlex.quote(c) for c in cmd)
+    """Run command with a pseudo-terminal using Python's pty module (cross-platform)."""
+    import pty
+    import select
 
-    script_bin = which("script")
-    if not script_bin:
-        proc = subprocess.run(cmd, cwd=cwd, text=True)
-        return proc.returncode
+    # Change directory if specified
+    original_cwd = os.getcwd()
+    if cwd:
+        os.chdir(cwd)
 
-    proc = subprocess.run([script_bin, "-q", "-c", cmd_str, "/dev/null"], cwd=cwd, text=True)
-    return proc.returncode
+    try:
+        # Create pseudo-terminal
+        master_fd, slave_fd = pty.openpty()
+
+        # Fork process
+        pid = os.fork()
+        if pid == 0:
+            # Child process
+            os.close(master_fd)
+            os.setsid()
+            os.dup2(slave_fd, 0)
+            os.dup2(slave_fd, 1)
+            os.dup2(slave_fd, 2)
+            if slave_fd > 2:
+                os.close(slave_fd)
+            os.execvp(cmd[0], cmd)
+        else:
+            # Parent process
+            os.close(slave_fd)
+            try:
+                while True:
+                    ready, _, _ = select.select([master_fd], [], [], 0.1)
+                    if ready:
+                        try:
+                            data = os.read(master_fd, 4096)
+                            if not data:
+                                break
+                            sys.stdout.write(data.decode("utf-8", errors="replace"))
+                            sys.stdout.flush()
+                        except OSError:
+                            break
+                    # Check if child is still running
+                    result = os.waitpid(pid, os.WNOHANG)
+                    if result[0] != 0:
+                        # Drain remaining output
+                        while True:
+                            ready, _, _ = select.select([master_fd], [], [], 0.1)
+                            if not ready:
+                                break
+                            try:
+                                data = os.read(master_fd, 4096)
+                                if not data:
+                                    break
+                                sys.stdout.write(data.decode("utf-8", errors="replace"))
+                                sys.stdout.flush()
+                            except OSError:
+                                break
+                        break
+            finally:
+                os.close(master_fd)
+
+            # Get exit status
+            _, status = os.waitpid(pid, 0)
+            return os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1
+    finally:
+        os.chdir(original_cwd)
 
 
 def tmux_cmd(socket_path: str, *args: str) -> list[str]:
